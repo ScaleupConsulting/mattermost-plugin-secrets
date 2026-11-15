@@ -1,0 +1,32 @@
+{
+    "id": "com.scaleupconsulting.secrets",
+    "name": "Secret Messages",
+    "description": "Send one-time secrets in direct and group messages, encrypted in the browser for each recipient and burned after reading.",
+    "version": "0.1.0",
+    "homepage_url": "",
+    "support_url": "",
+    "icon_path": "assets/secrets-icon.svg",
+    "min_server_version": "12.0.0",
+    "server": {
+        "executables": {
+            "linux-amd64": "server/dist/plugin-linux-amd64",
+            "linux-arm64": "server/dist/plugin-linux-arm64"
+        }
+    },
+    "webapp": {
+        "bundle_path": "webapp/dist/main.js"
+    },
+    "settings_schema": {
+        "header": "Secrets are encrypted in the sender's browser for each recipient. The server only ever holds ciphertext.",
+        "footer": "",
+        "settings": [
+            {
+                "key": "ExpiryMinutes",
+                "display_name": "Expiry (minutes):",
+                "type": "number",
+                "help_text": "Unread ciphertext is deleted this many minutes after sending. Default 10080 (7 days).",
+                "default": 10080
+            }
+        ]
+    }
+}
