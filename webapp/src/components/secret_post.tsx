@@ -11,13 +11,26 @@ import type {SecretStatus} from '../client';
 import {decryptEnvelope} from '../crypto';
 import {ensureKeyPair} from '../keys';
 
-type View = {kind: 'idle'} | {kind: 'busy'} | {kind: 'revealed'; text: string} | {kind: 'gone'} | {kind: 'error'; message: string};
+import './secret_post.css';
 
-const box: React.CSSProperties = {border: '1px solid rgba(var(--center-channel-color-rgb), 0.16)', borderRadius: 4, padding: '8px 12px', marginTop: 4, maxWidth: 560};
-const secretText: React.CSSProperties = {whiteSpace: 'pre-wrap', fontFamily: 'monospace', background: 'rgba(var(--center-channel-color-rgb), 0.06)', padding: 8, borderRadius: 4, userSelect: 'all'};
+type View = {kind: 'idle'} | {kind: 'busy'} | {kind: 'revealed'; text: string} | {kind: 'downloaded'} | {kind: 'gone'} | {kind: 'error'; message: string};
 
 /**
- * Renders a custom_secret post: a Reveal button for recipients, read status for the sender.
+ * Saves the secret as a text file without putting it in the DOM.
+ * @param text - the decrypted secret
+ * @param postId - the secret post's ID, used in the file name
+ */
+function downloadText(text: string, postId: string) {
+    const url = URL.createObjectURL(new Blob([text], {type: 'text/plain;charset=utf-8'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `secret-${postId}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Renders a custom_secret post: Reveal and Download buttons for recipients, read status for the sender.
  * @param props - the component props
  * @param props.post - the secret post
  * @returns the rendered post body
@@ -38,7 +51,7 @@ export default function SecretPost({post}: {post: Post}) {
         }
     }, [isSender, isBurned, post.id, post.update_at]);
 
-    const reveal = useCallback(async () => {
+    const open = useCallback(async (isDownload: boolean) => {
         setView({kind: 'busy'});
         let env;
         try {
@@ -55,34 +68,61 @@ export default function SecretPost({post}: {post: Post}) {
             setView({kind: 'error', message: 'This browser cannot decrypt the secret: its key was lost or replaced. Ask the sender to send it again.'});
             return;
         }
-        setView({kind: 'revealed', text});
-        ackSecret(post.id).catch((e) => setView({kind: 'error', message: `Revealed, but the server could not delete its copy: ${e.message}`}));
+        if (isDownload) {
+            downloadText(text, post.id);
+            setView({kind: 'downloaded'});
+        } else {
+            setView({kind: 'revealed', text});
+        }
+        ackSecret(post.id).catch((e) => setView({kind: 'error', message: `Opened, but the server could not delete its copy: ${e.message}`}));
     }, [post.id, post.channel_id, post.user_id, userId]);
 
     let body: React.ReactNode;
     if (view.kind === 'revealed') {
-        body = (
-            <>
-                <div
-                    style={secretText}
-                    data-testid='secret-revealed'
-                >{view.text}</div>
-                <div style={{opacity: 0.7, fontSize: 12, marginTop: 4}}>{'Deleted from the server. Copy it now: it will not show again after you leave or reload.'}</div>
-            </>
-        );
-    } else if (isBurned || view.kind === 'gone') {
-        body = <span data-testid='secret-burned'>{'Burned: this secret has been read or has expired.'}</span>;
-    } else if (isRecipient) {
+        const text = view.text;
         body = (
             <>
                 <button
-                    data-testid='secret-reveal'
-                    className='btn btn-primary btn-sm'
-                    disabled={view.kind === 'busy'}
-                    onClick={reveal}
-                >{view.kind === 'busy' ? 'Decrypting...' : 'Reveal secret'}</button>
-                <span style={{marginLeft: 8, opacity: 0.7, fontSize: 12}}>{'You can reveal it once.'}</span>
-                {view.kind === 'error' && <div style={{color: 'var(--error-text, #d24b4e)', marginTop: 4}}>{view.message}</div>}
+                    data-testid='secret-download'
+                    className='btn btn-tertiary btn-xs'
+                    onClick={() => downloadText(text, post.id)}
+                >{'Download'}</button>
+                <span className='Secrets-SecretPost__note'>{'Deleted from the server. Copy or download it now: it will not show again after you leave or reload.'}</span>
+                <div
+                    className='Secrets-SecretPost__full Secrets-SecretPost__text'
+                    data-testid='secret-revealed'
+                >{text}</div>
+            </>
+        );
+    } else if (view.kind === 'downloaded') {
+        body = <span data-testid='secret-downloaded'>{'Downloaded and deleted from the server.'}</span>;
+    } else if (isBurned || view.kind === 'gone') {
+        body = <span data-testid='secret-burned'>{'Burned: this secret has been read or has expired.'}</span>;
+    } else if (isRecipient) {
+        const isBusy = view.kind === 'busy';
+        body = (
+            <>
+                <span className='Secrets-SecretPost__actions'>
+                    <button
+                        data-testid='secret-reveal'
+                        className='btn btn-primary btn-xs'
+                        disabled={isBusy}
+                        onClick={() => open(false)}
+                    >{isBusy ? 'Decrypting...' : 'Reveal'}</button>
+                    <button
+                        data-testid='secret-download'
+                        className='btn btn-tertiary btn-xs'
+                        disabled={isBusy}
+                        onClick={() => open(true)}
+                    >{'Download'}</button>
+                </span>
+                <span className='Secrets-SecretPost__note'>{'You can open it once.'}</span>
+                {view.kind === 'error' && (
+                    <div
+                        className='Secrets-SecretPost__full Secrets-SecretPost__error'
+                        role='alert'
+                    >{view.message}</div>
+                )}
             </>
         );
     } else if (isSender) {
@@ -99,10 +139,10 @@ export default function SecretPost({post}: {post: Post}) {
 
     return (
         <div
-            style={box}
+            className='Secrets-SecretPost'
             data-testid='secret-post'
         >
-            <div style={{fontWeight: 600, marginBottom: 4}}>{'\u{1F512} Secret message'}</div>
+            <span className='Secrets-SecretPost__title'>{'\u{1F512} Secret message'}</span>
             {body}
         </div>
     );
