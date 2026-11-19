@@ -44,6 +44,8 @@ var allowedProps = map[string]bool{
 	propVersion: true, propRecipients: true, propExpiresAt: true, propNonce: true,
 	propBurned: true, propBurnedAt: true,
 	"from_plugin": true, "disable_group_highlight": true,
+	// The server stamps from_bot on every bot post, so bots can send secrets too.
+	model.PostPropsFromBot: true,
 }
 
 // publicKeyRecord is a user's registered ECDH P-256 public key.

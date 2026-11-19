@@ -2,7 +2,7 @@
     "id": "com.scaleupconsulting.secrets",
     "name": "Secret Messages",
     "description": "Send one-time secrets in direct and group messages, encrypted in the browser for each recipient and burned after reading.",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "homepage_url": "",
     "support_url": "",
     "icon_path": "assets/secrets-icon.svg",
