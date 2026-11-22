@@ -43,14 +43,15 @@ function filePost(bytes: number): Post {
 /**
  * Prepares an encrypted file secret for `me` and wires the client mocks to serve it.
  * @param size - plaintext bytes
+ * @param text - the manifest's text
  * @returns the plaintext and the stored chunks
  */
-async function serveFileSecret(size: number) {
+async function serveFileSecret(size: number, text = 'see attached') {
     const {pair, recipient} = await testRecipient(me);
     (keys.ensureKeyPair as jest.Mock).mockResolvedValue(pair);
     const plain = crypto.getRandomValues(new Uint8Array(size));
     const {chunks, file} = await encryptedFile(plain, '../../evil/report.pdf', chunkSize);
-    const manifest: SecretManifest = {v: 2, text: 'see attached', file};
+    const manifest: SecretManifest = {v: 2, text, file};
     mocked.getEnvelope.mockResolvedValue(await encryptFor(JSON.stringify(manifest), {userId: me, publicKey: recipient.public_key, kid: 'kid1'}, channelId, other, 2));
     mocked.getFileChunk.mockImplementation(async (_postId, i) => chunks[i].slice().buffer);
     mocked.ackSecret.mockResolvedValue();
@@ -75,6 +76,41 @@ describe('SecretPost with a file', () => {
         expect(screen.getByRole('button', {name: 'Save file'})).toBeVisible();
         expect(mocked.getFileChunk.mock.calls.map(([, i]) => i)).toEqual([0, 1, 2]);
         await waitFor(() => expect(mocked.ackSecret).toHaveBeenCalledWith(postId));
+    });
+
+    // The send-a-secret website puts the visitor's text in the manifest as a PGP block, or '' when they typed none.
+    const armored = '-----BEGIN PGP MESSAGE-----\n\nwcFMA1OaA4Fqk6ZvAQ/+Kp0=\n=AbCd\n-----END PGP MESSAGE-----\n';
+
+    test('website-shaped text plus file offers Download for the text and Save file for the file', async () => {
+        await serveFileSecret(2500, armored);
+        const saved: Blob[] = [];
+        URL.createObjectURL = jest.fn((blob: Blob) => {
+            saved.push(blob);
+            return 'blob:x';
+        });
+        URL.revokeObjectURL = jest.fn();
+        const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+        renderAs(<SecretPost post={filePost(2500)}/>);
+        await userEvent.click(screen.getByRole('button', {name: 'Open'}));
+        expect(await screen.findByRole('button', {name: 'Save file'})).toBeVisible();
+        expect(screen.getByTestId('secret-revealed')).toHaveTextContent('BEGIN PGP MESSAGE');
+        await userEvent.click(screen.getByRole('button', {name: 'Download'}));
+        const reader = new FileReader();
+        const read = new Promise((resolve) => {
+            reader.onload = () => resolve(reader.result);
+        });
+        reader.readAsText(saved[0]);
+        expect(await read).toBe(armored);
+        click.mockRestore();
+    });
+
+    test('website-shaped file with no text offers only Save file', async () => {
+        await serveFileSecret(2500, '');
+        renderAs(<SecretPost post={filePost(2500)}/>);
+        await userEvent.click(screen.getByRole('button', {name: 'Open'}));
+        expect(await screen.findByRole('button', {name: 'Save file'})).toBeVisible();
+        expect(screen.queryByTestId('secret-revealed')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', {name: 'Download'})).not.toBeInTheDocument();
     });
 
     test('a tampered chunk shows an error and does not ack', async () => {
