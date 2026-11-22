@@ -16,6 +16,8 @@ import SecretPost from './components/secret_post';
 import {openComposer} from './events';
 import {ensureKeyPair} from './keys';
 
+import en from '../i18n/en.json';
+
 const postType = 'custom_secret';
 
 export default class Plugin {
@@ -42,6 +44,7 @@ export default class Plugin {
         setupKey();
         store.subscribe(setupKey);
 
+        registry.registerTranslations((locale: string) => (locale === 'en' ? en : {}));
         registry.registerRootComponent(SecretModal);
         registry.registerPostTypeComponent(postType, SecretPost);
 
