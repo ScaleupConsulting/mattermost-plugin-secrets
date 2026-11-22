@@ -22,6 +22,7 @@
     "secrets.post.burned": "Burned: this secret has been read or has expired.",
     "secrets.post.decrypting": "Decrypting...",
     "secrets.post.download": "Download",
+    "secrets.post.downloadText": "Download text",
     "secrets.post.downloaded": "Downloaded and deleted from the server.",
     "secrets.post.expires": "Unread copies expire {when}.",
     "secrets.post.fileCorrupt": "The file could not be decrypted: it is incomplete or was tampered with. Try again, or ask the sender to send it again.",

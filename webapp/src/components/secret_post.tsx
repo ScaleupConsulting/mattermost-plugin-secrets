@@ -169,18 +169,6 @@ export default function SecretPost({post}: {post: Post}) {
         const {text, file} = view;
         body = (
             <>
-                {text !== '' && (
-                    <button
-                        data-testid='secret-download'
-                        className='btn btn-tertiary btn-xs'
-                        onClick={() => downloadText(text, post.id)}
-                    >
-                        <FormattedMessage
-                            id='secrets.post.download'
-                            defaultMessage='Download'
-                        />
-                    </button>
-                )}
                 <span className='Secrets-SecretPost__note'>
                     <FormattedMessage
                         id='secrets.post.revealedNote'
@@ -188,13 +176,27 @@ export default function SecretPost({post}: {post: Post}) {
                     />
                 </span>
                 {text !== '' && (
-                    <div
-                        className='Secrets-SecretPost__full Secrets-SecretPost__text'
-                        data-testid='secret-revealed'
-                    >{text}</div>
+                    <>
+                        <div
+                            className='Secrets-SecretPost__full Secrets-SecretPost__text'
+                            data-testid='secret-revealed'
+                        >{text}</div>
+                        <div className='Secrets-SecretPost__full Secrets-SecretPost__row'>
+                            <button
+                                data-testid='secret-download'
+                                className='btn btn-primary btn-xs'
+                                onClick={() => downloadText(text, post.id)}
+                            >
+                                <FormattedMessage
+                                    id='secrets.post.downloadText'
+                                    defaultMessage='Download text'
+                                />
+                            </button>
+                        </div>
+                    </>
                 )}
                 {file && (
-                    <div className='Secrets-SecretPost__full Secrets-SecretPost__file'>
+                    <div className='Secrets-SecretPost__full Secrets-SecretPost__row'>
                         <span
                             className='Secrets-SecretPost__fileName'
                             data-testid='secret-file-name'

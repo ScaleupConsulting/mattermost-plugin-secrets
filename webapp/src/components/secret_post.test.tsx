@@ -94,7 +94,9 @@ describe('SecretPost with a file', () => {
         await userEvent.click(screen.getByRole('button', {name: 'Open'}));
         expect(await screen.findByRole('button', {name: 'Save file'})).toBeVisible();
         expect(screen.getByTestId('secret-revealed')).toHaveTextContent('BEGIN PGP MESSAGE');
-        await userEvent.click(screen.getByRole('button', {name: 'Download'}));
+        const textBox = screen.getByTestId('secret-revealed');
+        expect(textBox.nextElementSibling).toContainElement(screen.getByRole('button', {name: 'Download text'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Download text'}));
         const reader = new FileReader();
         const read = new Promise((resolve) => {
             reader.onload = () => resolve(reader.result);
@@ -110,7 +112,7 @@ describe('SecretPost with a file', () => {
         await userEvent.click(screen.getByRole('button', {name: 'Open'}));
         expect(await screen.findByRole('button', {name: 'Save file'})).toBeVisible();
         expect(screen.queryByTestId('secret-revealed')).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', {name: 'Download'})).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', {name: /Download/})).not.toBeInTheDocument();
     });
 
     test('a tampered chunk shows an error and does not ack', async () => {
@@ -150,6 +152,7 @@ describe('SecretPost with text only', () => {
         expect(screen.queryByTestId('secret-file-size')).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'Reveal'}));
         expect(await screen.findByTestId('secret-revealed')).toHaveTextContent('hunter2');
+        expect(screen.getByTestId('secret-revealed').nextElementSibling).toContainElement(screen.getByRole('button', {name: 'Download text'}));
         await waitFor(() => expect(mocked.ackSecret).toHaveBeenCalledWith(postId));
         expect(mocked.getFileChunk).not.toHaveBeenCalled();
     });
