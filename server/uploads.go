@@ -191,6 +191,16 @@ func (p *Plugin) listUploads() ([]*uploadSession, error) {
 	return out, nil
 }
 
+// maxFileBytes returns the server's FileSettings.MaxFileSize, the one source of the file secret limit.
+// A missing or non-positive value refuses file secrets instead of guessing a limit.
+func (p *Plugin) maxFileBytes() (int64, error) {
+	cfg := p.API.GetConfig()
+	if cfg == nil || cfg.FileSettings.MaxFileSize == nil || *cfg.FileSettings.MaxFileSize <= 0 {
+		return 0, newStatusError(http.StatusServiceUnavailable, "File secrets are unavailable: set Maximum File Size in System Console > File Storage.")
+	}
+	return *cfg.FileSettings.MaxFileSize, nil
+}
+
 // checkFileSender refuses users the FileSecretSenders setting does not allow to send files.
 // It is the one check every file entry point (session create, attach, recipients) calls.
 func (p *Plugin) checkFileSender(userID string) error {
@@ -241,8 +251,12 @@ func (p *Plugin) createUpload(userID, channelID string, maxBytes int64) (*upload
 	if maxBytes <= 0 {
 		return nil, newStatusError(http.StatusBadRequest, "max_bytes must be positive")
 	}
-	if maxBytes > conf.maxFileBytes()+fileSlackBytes {
-		return nil, newStatusError(http.StatusRequestEntityTooLarge, fmt.Sprintf("Files can be at most %d MB.", conf.maxFileBytes()/bytesPerMB))
+	maxFile, err := p.maxFileBytes()
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes > maxFile+fileSlackBytes {
+		return nil, newStatusError(http.StatusRequestEntityTooLarge, fmt.Sprintf("Files can be at most %d MB.", maxFile/bytesPerMB))
 	}
 	maxChunks := int((maxBytes + fileChunkBytes - 1) / fileChunkBytes)
 	if maxChunks > maxChunkIndex+1 {
@@ -269,7 +283,7 @@ func (p *Plugin) createUpload(userID, channelID string, maxBytes int64) (*upload
 	if open >= maxOpenUploadsPerUser {
 		return nil, newStatusError(http.StatusTooManyRequests, "You already have uploads in progress. Finish or cancel them first.")
 	}
-	if userBytes+maxBytes > conf.maxUserBytes() {
+	if userBytes+maxBytes > 2*maxFile {
 		return nil, newStatusError(http.StatusInsufficientStorage, "You have too many unread file secrets. Wait until they are read or expire.")
 	}
 	if allBytes+maxBytes > conf.maxStorageBytes() {

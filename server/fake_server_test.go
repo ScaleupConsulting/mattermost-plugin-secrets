@@ -33,6 +33,15 @@ type fakeServer struct {
 	members  map[string][]string
 	posts    map[string]*model.Post
 	audits   []*model.AuditRecord
+	// maxFileSize is the server's FileSettings.MaxFileSize; nil leaves it unset.
+	maxFileSize *int64
+}
+
+// setMaxFileSize sets the fake server's FileSettings.MaxFileSize (nil to unset it).
+func (f *fakeServer) setMaxFileSize(v *int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.maxFileSize = v
 }
 
 // testWorld names the users and channel every test starts with.
@@ -52,6 +61,7 @@ func newTestPlugin(t *testing.T, conf *configuration) (*Plugin, *fakeServer, tes
 		members:  map[string][]string{},
 		posts:    map[string]*model.Post{},
 	}
+	f.maxFileSize = model.NewPointer(int64(100 * bytesPerMB))
 	w := testWorld{
 		sender: model.NewId(), recipient: model.NewId(), outsider: model.NewId(), bot: model.NewId(),
 		dm: model.NewId(), botDM: model.NewId(), openChannel: model.NewId(),
@@ -101,6 +111,13 @@ func notFound() *model.AppError {
 
 // install registers the fake's behaviour on every plugin API method the plugin calls.
 func (f *fakeServer) install(api *plugintest.API, p *Plugin) {
+	api.On("GetConfig").Return(func() *model.Config {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		cfg := &model.Config{}
+		cfg.FileSettings.MaxFileSize = f.maxFileSize
+		return cfg
+	}).Maybe()
 	api.On("KVGet", mock.Anything).Return(func(key string) ([]byte, *model.AppError) {
 		f.mu.Lock()
 		defer f.mu.Unlock()

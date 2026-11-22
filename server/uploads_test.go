@@ -187,7 +187,7 @@ func TestCreateUpload(t *testing.T) {
 		{"not a DM", nil, func(w testWorld) string { return w.sender }, func(w testWorld) string { return w.openChannel }, 10, http.StatusForbidden},
 		{"file secrets off", &configuration{FileSecretSenders: sendersNobody}, func(w testWorld) string { return w.sender }, func(w testWorld) string { return w.dm }, 10, http.StatusForbidden},
 		{"bots only, human sender", &configuration{FileSecretSenders: sendersBots}, func(w testWorld) string { return w.sender }, func(w testWorld) string { return w.dm }, 10, http.StatusForbidden},
-		{"over the file limit", &configuration{MaxFileSizeMB: 1}, func(w testWorld) string { return w.sender }, func(w testWorld) string { return w.dm }, mb + fileSlackBytes + 1, http.StatusRequestEntityTooLarge},
+		{"over the file limit", nil, func(w testWorld) string { return w.sender }, func(w testWorld) string { return w.dm }, 100*mb + fileSlackBytes + 1, http.StatusRequestEntityTooLarge},
 		{"zero bytes", nil, func(w testWorld) string { return w.sender }, func(w testWorld) string { return w.dm }, 0, http.StatusBadRequest},
 	}
 	for _, tc := range denied {
@@ -203,9 +203,20 @@ func TestCreateUpload(t *testing.T) {
 		startUpload(t, p, w.bot, w.botDM, 10)
 	})
 	t.Run("PGP slack over the limit is allowed", func(t *testing.T) {
-		p, _, w := newTestPlugin(t, &configuration{MaxFileSizeMB: 1})
+		p, f, w := newTestPlugin(t, nil)
+		f.setMaxFileSize(model.NewPointer(int64(mb)))
 		startUpload(t, p, w.sender, w.dm, mb+fileSlackBytes)
 	})
+	for name, v := range map[string]*int64{"unset": nil, "zero": model.NewPointer(int64(0)), "negative": model.NewPointer(int64(-1))} {
+		t.Run("server MaxFileSize "+name+" refuses uploads", func(t *testing.T) {
+			p, f, w := newTestPlugin(t, nil)
+			f.setMaxFileSize(v)
+			rec := do(p, w.sender, http.MethodPost, "/uploads", mustJSON(t, map[string]any{"channel_id": w.dm, "max_bytes": 10}))
+			assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			assert.Contains(t, rec.Body.String(), "Maximum File Size")
+			assert.Empty(t, f.keysWithPrefix(keyPrefixUpload))
+		})
+	}
 	t.Run("audit record names the upload", func(t *testing.T) {
 		p, f, w := newTestPlugin(t, nil)
 		id := startUpload(t, p, w.sender, w.dm, 10)
@@ -221,14 +232,16 @@ func TestCreateUpload(t *testing.T) {
 		assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 	})
 	t.Run("per-user storage is twice the file limit", func(t *testing.T) {
-		p, _, w := newTestPlugin(t, &configuration{MaxFileSizeMB: 1})
+		p, f, w := newTestPlugin(t, nil)
+		f.setMaxFileSize(model.NewPointer(int64(mb)))
 		startUpload(t, p, w.sender, w.dm, mb)
 		rec := do(p, w.sender, http.MethodPost, "/uploads", mustJSON(t, map[string]any{"channel_id": w.dm, "max_bytes": mb + 1}))
 		assert.Equal(t, http.StatusInsufficientStorage, rec.Code)
 		startUpload(t, p, w.sender, w.dm, mb)
 	})
 	t.Run("global storage cap", func(t *testing.T) {
-		p, _, w := newTestPlugin(t, &configuration{MaxFileSizeMB: 2, MaxStorageMB: 3})
+		p, f, w := newTestPlugin(t, &configuration{MaxStorageMB: 3})
+		f.setMaxFileSize(model.NewPointer(int64(2 * mb)))
 		startUpload(t, p, w.sender, w.dm, 2*mb)
 		rec := do(p, w.bot, http.MethodPost, "/uploads", mustJSON(t, map[string]any{"channel_id": w.botDM, "max_bytes": mb + 1}))
 		assert.Equal(t, http.StatusInsufficientStorage, rec.Code)
@@ -421,18 +434,23 @@ func TestFileSecretCleanup(t *testing.T) {
 }
 
 func TestRecipientsReportsFileLimits(t *testing.T) {
+	five := model.NewPointer(int64(5 * bytesPerMB))
 	tests := []struct {
 		name      string
 		conf      *configuration
+		maxFile   *int64
 		isEnabled bool
+		wantMax   int64
 	}{
-		{"everyone", &configuration{MaxFileSizeMB: 5}, true},
-		{"bots only", &configuration{MaxFileSizeMB: 5, FileSecretSenders: sendersBots}, false},
-		{"nobody", &configuration{MaxFileSizeMB: 5, FileSecretSenders: sendersNobody}, false},
+		{"everyone", &configuration{}, five, true, 5 * bytesPerMB},
+		{"bots only", &configuration{FileSecretSenders: sendersBots}, five, false, 5 * bytesPerMB},
+		{"nobody", &configuration{FileSecretSenders: sendersNobody}, five, false, 5 * bytesPerMB},
+		{"server MaxFileSize unset", &configuration{}, nil, false, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p, _, w := newTestPlugin(t, tc.conf)
+			p, f, w := newTestPlugin(t, tc.conf)
+			f.setMaxFileSize(tc.maxFile)
 			rec := do(p, w.sender, http.MethodGet, "/channels/"+w.dm+"/recipients", nil)
 			require.Equal(t, http.StatusOK, rec.Code)
 			var out struct {
@@ -441,7 +459,7 @@ func TestRecipientsReportsFileLimits(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
 			assert.Equal(t, tc.isEnabled, out.Enabled)
-			assert.Equal(t, int64(5*bytesPerMB), out.Max)
+			assert.Equal(t, tc.wantMax, out.Max)
 		})
 	}
 }

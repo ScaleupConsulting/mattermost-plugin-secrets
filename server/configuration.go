@@ -25,9 +25,6 @@ type configuration struct {
 	// FileSecretSenders is who may attach files: everyone, bots or nobody.
 	FileSecretSenders string
 
-	// MaxFileSizeMB bounds one file; each user may hold twice this in file secrets.
-	MaxFileSizeMB int
-
 	// MaxStorageMB bounds all file data in the KV store, uploads in progress included.
 	MaxStorageMB int
 
@@ -40,7 +37,6 @@ const (
 	sendersBots     = "bots"
 	sendersNobody   = "nobody"
 
-	defaultMaxFileSizeMB        = 100
 	defaultMaxStorageMB         = 2048
 	defaultUploadSessionMinutes = 60
 
@@ -66,19 +62,6 @@ func (c *configuration) fileSenders() string {
 	default:
 		return sendersEveryone
 	}
-}
-
-// maxFileBytes returns the largest file one secret may carry.
-func (c *configuration) maxFileBytes() int64 {
-	if c.MaxFileSizeMB <= 0 {
-		return defaultMaxFileSizeMB * bytesPerMB
-	}
-	return int64(c.MaxFileSizeMB) * bytesPerMB
-}
-
-// maxUserBytes returns how much file data one user may hold, twice the file limit.
-func (c *configuration) maxUserBytes() int64 {
-	return 2 * c.maxFileBytes()
 }
 
 // maxStorageBytes returns the cap on file data across all users.

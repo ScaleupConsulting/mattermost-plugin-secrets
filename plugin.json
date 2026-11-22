@@ -31,7 +31,7 @@
                 "key": "FileSecretSenders",
                 "display_name": "File secrets can be sent by:",
                 "type": "dropdown",
-                "help_text": "Who may attach an encrypted file to a secret. Everyone: users in the composer and bots through the API. Bots only: for example the website relay. Nobody: file secrets are off.",
+                "help_text": "Who may attach an encrypted file to a secret. Everyone: users in the composer and bots through the API. Bots only: for example the website relay. Nobody: file secrets are off. The largest file is the server's Maximum File Size (System Console > File Storage); each user can hold at most twice that in unread file secrets.",
                 "default": "everyone",
                 "options": [
                     {
@@ -47,13 +47,6 @@
                         "value": "nobody"
                     }
                 ]
-            },
-            {
-                "key": "MaxFileSizeMB",
-                "display_name": "Maximum file size (MB):",
-                "type": "number",
-                "help_text": "Largest file one secret may carry. Each user can hold at most twice this in unread file secrets. Default 100.",
-                "default": 100
             },
             {
                 "key": "MaxStorageMB",

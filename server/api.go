@@ -121,13 +121,13 @@ func (p *Plugin) handleRecipients(w http.ResponseWriter, r *http.Request) {
 			missing = append(missing, info.Username)
 		}
 	}
-	conf := p.getConfiguration()
+	maxFile, maxErr := p.maxFileBytes()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"recipients":           recipients,
 		"missing":              missing,
-		"expiry_minutes":       int(conf.expiry() / time.Minute),
-		"file_secrets_enabled": p.checkFileSender(userID) == nil,
-		"max_file_bytes":       conf.maxFileBytes(),
+		"expiry_minutes":       int(p.getConfiguration().expiry() / time.Minute),
+		"file_secrets_enabled": maxErr == nil && p.checkFileSender(userID) == nil,
+		"max_file_bytes":       maxFile,
 	})
 }
 
