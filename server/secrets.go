@@ -29,6 +29,7 @@ const (
 	propNonce      = "secret_nonce"
 	propBurned     = "secret_burned"
 	propBurnedAt   = "secret_burned_at"
+	propFileBytes  = "secret_file_bytes"
 
 	keyPrefixPubKey   = "pk_"
 	keyPrefixEnvelope = "env_"
@@ -42,7 +43,7 @@ const (
 // allowedProps lists every prop key a secret post may carry; anything else is rejected.
 var allowedProps = map[string]bool{
 	propVersion: true, propRecipients: true, propExpiresAt: true, propNonce: true,
-	propBurned: true, propBurnedAt: true,
+	propBurned: true, propBurnedAt: true, propFileBytes: true,
 	"from_plugin": true, "disable_group_highlight": true,
 	// The server stamps from_bot on every bot post, so bots can send secrets too.
 	model.PostPropsFromBot: true,
@@ -70,6 +71,10 @@ type secretIndex struct {
 	SenderID  string   `json:"sender_id"`
 	Remaining []string `json:"remaining"`
 	ExpiresAt int64    `json:"expires_at"`
+	// UploadID, Chunks and Bytes describe the attached encrypted file, if any.
+	UploadID string `json:"upload_id,omitempty"`
+	Chunks   int    `json:"chunks,omitempty"`
+	Bytes    int64  `json:"bytes,omitempty"`
 }
 
 // envelopeKey names the KV row that holds one recipient's ciphertext for one post.
@@ -177,7 +182,8 @@ func (p *Plugin) setJSON(key string, v any) error {
 }
 
 // createSecret stores each recipient's envelope and posts the placeholder in the channel.
-func (p *Plugin) createSecret(senderID, channelID, rootID string, envelopes map[string]envelope) (*model.Post, error) {
+// With file set, it attaches a completed upload and marks the post as version 2.
+func (p *Plugin) createSecret(senderID, channelID, rootID string, envelopes map[string]envelope, file *fileRef) (*model.Post, error) {
 	recipients, err := p.channelRecipients(channelID, senderID)
 	if err != nil {
 		return nil, err
@@ -203,6 +209,27 @@ func (p *Plugin) createSecret(senderID, channelID, rootID string, envelopes map[
 		}
 	}
 
+	version := 1
+	if file != nil {
+		if err := p.checkFileSender(senderID); err != nil {
+			return nil, err
+		}
+		if !model.IsValidId(file.UploadID) {
+			return nil, errors.New("invalid upload_id")
+		}
+		// Held until the index is stored, so the sweep never sees an attached upload without its index.
+		unlock := p.lockUpload(file.UploadID)
+		defer unlock()
+		s, found, err := p.getUpload(file.UploadID)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to read upload")
+		}
+		if err := validateAttach(s, found, senderID, channelID, *file, time.Now()); err != nil {
+			return nil, err
+		}
+		version = 2
+	}
+
 	expiresAt := time.Now().Add(p.getConfiguration().expiry()).UnixMilli()
 	nonce := model.NewId()
 	post := &model.Post{
@@ -212,16 +239,29 @@ func (p *Plugin) createSecret(senderID, channelID, rootID string, envelopes map[
 		Type:      PostType,
 		Message:   Placeholder,
 	}
-	post.AddProp(propVersion, 1)
+	post.AddProp(propVersion, version)
 	post.AddProp(propRecipients, recipients)
 	post.AddProp(propExpiresAt, expiresAt)
 	post.AddProp(propNonce, nonce)
+	if file != nil {
+		post.AddProp(propFileBytes, file.Bytes)
+	}
 
 	p.pendingCreates.Store(nonce, true)
 	created, appErr := p.API.CreatePost(post)
 	p.pendingCreates.Delete(nonce)
 	if appErr != nil {
 		return nil, errors.Wrap(appErr, "failed to create post")
+	}
+	if file != nil {
+		err := p.updateUpload(file.UploadID, func(s *uploadSession) error {
+			s.State, s.PostID, s.Chunks, s.Bytes = uploadStateAttached, created.Id, file.Chunks, file.Bytes
+			return nil
+		})
+		if err != nil {
+			_ = p.API.DeletePost(created.Id)
+			return nil, errors.Wrap(err, "failed to attach upload")
+		}
 	}
 
 	p.secretsLock.Lock()
@@ -232,6 +272,9 @@ func (p *Plugin) createSecret(senderID, channelID, rootID string, envelopes map[
 		}
 	}
 	idx := secretIndex{PostID: created.Id, ChannelID: channelID, SenderID: senderID, Remaining: recipients, ExpiresAt: expiresAt}
+	if file != nil {
+		idx.UploadID, idx.Chunks, idx.Bytes = file.UploadID, file.Chunks, file.Bytes
+	}
 	if err := p.setJSON(keyPrefixIndex+created.Id, idx); err != nil {
 		return nil, errors.Wrap(err, "failed to store secret index")
 	}
@@ -264,16 +307,30 @@ func (p *Plugin) ackSecret(postID, userID string) error {
 	return p.burnLocked(idx)
 }
 
-// burnLocked removes every envelope and the index for a secret and marks its post burned.
+// purgeLocked removes every envelope, the file chunks and upload session, and the index for a secret.
 // The caller must hold secretsLock.
-func (p *Plugin) burnLocked(idx secretIndex) error {
+func (p *Plugin) purgeLocked(idx secretIndex) error {
 	for _, uid := range idx.Remaining {
 		if appErr := p.API.KVDelete(envelopeKey(idx.PostID, uid)); appErr != nil {
 			return appErr
 		}
 	}
+	if idx.UploadID != "" {
+		if err := p.deleteUpload(idx.UploadID, idx.Chunks); err != nil {
+			return err
+		}
+	}
 	if appErr := p.API.KVDelete(keyPrefixIndex + idx.PostID); appErr != nil {
 		return appErr
+	}
+	return nil
+}
+
+// burnLocked purges a secret's ciphertext and marks its post burned.
+// The caller must hold secretsLock.
+func (p *Plugin) burnLocked(idx secretIndex) error {
+	if err := p.purgeLocked(idx); err != nil {
+		return err
 	}
 	post, appErr := p.API.GetPost(idx.PostID)
 	if appErr != nil {
@@ -290,25 +347,53 @@ func (p *Plugin) burnLocked(idx secretIndex) error {
 	return nil
 }
 
-// sweepExpired burns every secret whose expiry has passed. It runs once a minute on one node.
+// sweepExpired burns every expired secret and clears abandoned uploads. It runs once a minute on one node.
 func (p *Plugin) sweepExpired() {
 	now := time.Now().UnixMilli()
-	for page := 0; ; page++ {
-		keys, appErr := p.API.KVList(page, 200)
-		if appErr != nil {
-			p.API.LogError("expiry sweep: KVList failed", "err", appErr.Error())
+	keys, err := p.listKeys(keyPrefixIndex)
+	if err != nil {
+		p.API.LogError("expiry sweep: listing secrets failed", "err", err.Error())
+		return
+	}
+	for _, k := range keys {
+		p.sweepOne(k, now)
+	}
+	keys, err = p.listKeys(keyPrefixUpload)
+	if err != nil {
+		p.API.LogError("expiry sweep: listing uploads failed", "err", err.Error())
+		return
+	}
+	for _, k := range keys {
+		p.sweepUpload(strings.TrimPrefix(k, keyPrefixUpload), now)
+	}
+}
+
+// sweepUpload deletes an open upload past its window, or an attached one whose secret is gone.
+func (p *Plugin) sweepUpload(uploadID string, now int64) {
+	unlock := p.lockUpload(uploadID)
+	defer unlock()
+	s, found, err := p.getUpload(uploadID)
+	if err != nil || !found {
+		return
+	}
+	switch s.State {
+	case uploadStateOpen:
+		if s.ExpiresAt > now {
 			return
 		}
-		for _, k := range keys {
-			if !strings.HasPrefix(k, keyPrefixIndex) {
-				continue
-			}
-			p.sweepOne(k, now)
-		}
-		if len(keys) < 200 {
+	case uploadStateAttached:
+		p.secretsLock.Lock()
+		data, appErr := p.API.KVGet(keyPrefixIndex + s.PostID)
+		p.secretsLock.Unlock()
+		if appErr != nil || data != nil {
 			return
 		}
 	}
+	if err := p.deleteUpload(uploadID, s.MaxChunks); err != nil {
+		p.API.LogError("expiry sweep: deleting upload failed", "upload_id", uploadID, "err", err.Error())
+		return
+	}
+	p.API.LogInfo("expiry sweep: deleted abandoned upload", "upload_id", uploadID)
 }
 
 // sweepOne burns a single secret if it has expired.

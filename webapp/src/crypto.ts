@@ -2,6 +2,9 @@
 
 export type Envelope = {kid: string; epk: string; iv: string; ct: string};
 
+/** Envelope format: 1 carries the secret text, 2 a JSON manifest that may describe a file. */
+export type EnvelopeVersion = 1 | 2;
+
 const curve = {name: 'ECDH', namedCurve: 'P-256'};
 const info = new TextEncoder().encode('mm-secrets-v1');
 
@@ -34,10 +37,11 @@ export function fromB64(b64: string): Uint8Array {
  * @param channelId - the DM or group DM
  * @param senderId - the user who sent the secret
  * @param recipientId - the user the envelope is for
+ * @param version - envelope format, so a v2 manifest can never be read as v1 text or back
  * @returns AES-GCM additional data
  */
-function aad(channelId: string, senderId: string, recipientId: string): Uint8Array {
-    return new TextEncoder().encode(`v1|${channelId}|${senderId}|${recipientId}`);
+function aad(channelId: string, senderId: string, recipientId: string, version: EnvelopeVersion): Uint8Array {
+    return new TextEncoder().encode(`v${version}|${channelId}|${senderId}|${recipientId}`);
 }
 
 /**
@@ -86,6 +90,7 @@ export async function exportPublicKey(pub: CryptoKey): Promise<string> {
  * @param recipient.kid - key ID as registered on the server
  * @param channelId - the channel the secret is posted in
  * @param senderId - the sending user's ID
+ * @param version - envelope format; 2 for a file manifest
  * @returns the envelope to upload
  */
 export async function encryptFor(
@@ -93,6 +98,7 @@ export async function encryptFor(
     recipient: {userId: string; publicKey: string; kid: string},
     channelId: string,
     senderId: string,
+    version: EnvelopeVersion = 1,
 ): Promise<Envelope> {
     const pub = await crypto.subtle.importKey('spki', fromB64(recipient.publicKey), curve, false, []);
     const eph = await crypto.subtle.generateKey(curve, true, ['deriveBits']) as CryptoKeyPair;
@@ -100,7 +106,7 @@ export async function encryptFor(
     const key = await deriveAesKey(eph.privateKey, pub, epkRaw, 'encrypt');
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ct = await crypto.subtle.encrypt(
-        {name: 'AES-GCM', iv, additionalData: aad(channelId, senderId, recipient.userId)},
+        {name: 'AES-GCM', iv, additionalData: aad(channelId, senderId, recipient.userId, version)},
         key,
         new TextEncoder().encode(plaintext),
     );
@@ -114,14 +120,22 @@ export async function encryptFor(
  * @param channelId - the post's channel
  * @param senderId - the post's author
  * @param recipientId - our user ID
+ * @param version - envelope format from the post's secret_v
  * @returns the plaintext secret
  */
-export async function decryptEnvelope(env: Envelope, priv: CryptoKey, channelId: string, senderId: string, recipientId: string): Promise<string> {
+export async function decryptEnvelope(
+    env: Envelope,
+    priv: CryptoKey,
+    channelId: string,
+    senderId: string,
+    recipientId: string,
+    version: EnvelopeVersion = 1,
+): Promise<string> {
     const epkRaw = fromB64(env.epk);
     const epk = await crypto.subtle.importKey('raw', epkRaw, curve, false, []);
     const key = await deriveAesKey(priv, epk, epkRaw, 'decrypt');
     const pt = await crypto.subtle.decrypt(
-        {name: 'AES-GCM', iv: fromB64(env.iv), additionalData: aad(channelId, senderId, recipientId)},
+        {name: 'AES-GCM', iv: fromB64(env.iv), additionalData: aad(channelId, senderId, recipientId, version)},
         key,
         fromB64(env.ct),
     );

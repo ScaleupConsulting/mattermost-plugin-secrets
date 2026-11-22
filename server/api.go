@@ -6,21 +6,27 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/pkg/errors"
 )
 
 // ServeHTTP routes the plugin's REST API; every route requires a logged-in user.
-func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) ServeHTTP(c *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	router := mux.NewRouter()
 	router.Use(requireUser)
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/keys", p.handleRegisterKey).Methods(http.MethodPost)
 	api.HandleFunc("/keys/me", p.handleGetMyKey).Methods(http.MethodGet)
 	api.HandleFunc("/channels/{channel_id:[a-z0-9]{26}}/recipients", p.handleRecipients).Methods(http.MethodGet)
-	api.HandleFunc("/secrets", p.handleCreateSecret).Methods(http.MethodPost)
+	api.HandleFunc("/secrets", func(w http.ResponseWriter, r *http.Request) { p.handleCreateSecret(c, w, r) }).Methods(http.MethodPost)
 	api.HandleFunc("/secrets/{post_id:[a-z0-9]{26}}/envelope", p.handleGetEnvelope).Methods(http.MethodGet)
 	api.HandleFunc("/secrets/{post_id:[a-z0-9]{26}}/ack", p.handleAck).Methods(http.MethodPost)
 	api.HandleFunc("/secrets/{post_id:[a-z0-9]{26}}/status", p.handleStatus).Methods(http.MethodGet)
+	api.HandleFunc("/secrets/{post_id:[a-z0-9]{26}}/file/{n:[0-9]{1,4}}", p.handleGetFileChunk).Methods(http.MethodGet)
+	api.HandleFunc("/uploads", func(w http.ResponseWriter, r *http.Request) { p.handleCreateUpload(c, w, r) }).Methods(http.MethodPost)
+	api.HandleFunc("/uploads/{upload_id:[a-z0-9]{26}}/chunks/{n:[0-9]{1,4}}", p.handlePutChunk).Methods(http.MethodPut)
+	api.HandleFunc("/uploads/{upload_id:[a-z0-9]{26}}", func(w http.ResponseWriter, r *http.Request) { p.handleDeleteUpload(c, w, r) }).Methods(http.MethodDelete)
 	router.ServeHTTP(w, r)
 }
 
@@ -115,28 +121,52 @@ func (p *Plugin) handleRecipients(w http.ResponseWriter, r *http.Request) {
 			missing = append(missing, info.Username)
 		}
 	}
+	maxFile, maxErr := p.maxFileBytes()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"recipients":     recipients,
-		"missing":        missing,
-		"expiry_minutes": int(p.getConfiguration().expiry() / time.Minute),
+		"recipients":           recipients,
+		"missing":              missing,
+		"expiry_minutes":       int(p.getConfiguration().expiry() / time.Minute),
+		"file_secrets_enabled": maxErr == nil && p.checkFileSender(userID) == nil,
+		"max_file_bytes":       maxFile,
 	})
 }
 
 // handleCreateSecret accepts per-recipient ciphertext from the sender's browser and posts the placeholder.
-func (p *Plugin) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
+// An optional file attaches a completed upload.
+func (p *Plugin) handleCreateSecret(c *plugin.Context, w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("Mattermost-User-ID")
 	var body struct {
 		ChannelID string              `json:"channel_id"`
 		RootID    string              `json:"root_id"`
 		Envelopes map[string]envelope `json:"envelopes"`
+		File      *fileRef            `json:"file"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGroupMembers*(maxCiphertextB64+1024))).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	post, err := p.createSecret(r.Header.Get("Mattermost-User-ID"), body.ChannelID, body.RootID, body.Envelopes)
+	var audit *model.AuditRecord
+	if body.File != nil {
+		audit = plugin.MakeAuditRecordWithContext("secretsAttachUpload", model.AuditStatusFail, c, userID, r.URL.Path)
+		defer p.API.LogAuditRec(audit)
+		if model.IsValidId(body.ChannelID) && model.IsValidId(body.File.UploadID) {
+			model.AddEventParameterToAuditRec(audit, "channel_id", body.ChannelID)
+			model.AddEventParameterToAuditRec(audit, "upload_id", body.File.UploadID)
+		}
+	}
+	post, err := p.createSecret(userID, body.ChannelID, body.RootID, body.Envelopes, body.File)
 	if err != nil {
+		var se *statusError
+		if errors.As(err, &se) {
+			writeError(w, se.status, se.msg)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if audit != nil {
+		model.AddEventParameterToAuditRec(audit, "post_id", post.Id)
+		audit.Success()
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"post_id": post.Id})
 }
