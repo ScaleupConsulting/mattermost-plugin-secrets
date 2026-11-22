@@ -60,7 +60,7 @@ func (p *Plugin) MessageWillBeUpdated(_ *plugin.Context, newPost, oldPost *model
 	return nil, "Secret messages cannot be edited. Delete it and send a new one."
 }
 
-// MessageHasBeenDeleted removes any remaining ciphertext when a secret post is deleted.
+// MessageHasBeenDeleted removes any remaining ciphertext and file chunks when a secret post is deleted.
 func (p *Plugin) MessageHasBeenDeleted(_ *plugin.Context, post *model.Post) {
 	if post.Type != PostType {
 		return
@@ -72,8 +72,7 @@ func (p *Plugin) MessageHasBeenDeleted(_ *plugin.Context, post *model.Post) {
 	if err != nil || !found {
 		return
 	}
-	for _, uid := range idx.Remaining {
-		_ = p.API.KVDelete(envelopeKey(post.Id, uid))
+	if err := p.purgeLocked(idx); err != nil {
+		p.API.LogError("failed to purge deleted secret", "post_id", post.Id, "err", err.Error())
 	}
-	_ = p.API.KVDelete(keyPrefixIndex + post.Id)
 }

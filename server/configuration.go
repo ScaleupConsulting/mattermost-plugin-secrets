@@ -21,7 +21,31 @@ import (
 type configuration struct {
 	// ExpiryMinutes is how long unread ciphertext lives before the sweeper deletes it.
 	ExpiryMinutes int
+
+	// FileSecretSenders is who may attach files: everyone, bots or nobody.
+	FileSecretSenders string
+
+	// MaxFileSizeMB bounds one file; each user may hold twice this in file secrets.
+	MaxFileSizeMB int
+
+	// MaxStorageMB bounds all file data in the KV store, uploads in progress included.
+	MaxStorageMB int
+
+	// UploadSessionMinutes is how long an unfinished upload lives.
+	UploadSessionMinutes int
 }
+
+const (
+	sendersEveryone = "everyone"
+	sendersBots     = "bots"
+	sendersNobody   = "nobody"
+
+	defaultMaxFileSizeMB        = 100
+	defaultMaxStorageMB         = 2048
+	defaultUploadSessionMinutes = 60
+
+	bytesPerMB = 1 << 20
+)
 
 // defaultExpiryMinutes is 7 days, used when the admin leaves the setting empty or invalid.
 const defaultExpiryMinutes = 7 * 24 * 60
@@ -32,6 +56,45 @@ func (c *configuration) expiry() time.Duration {
 		return defaultExpiryMinutes * time.Minute
 	}
 	return time.Duration(c.ExpiryMinutes) * time.Minute
+}
+
+// fileSenders returns who may send file secrets, treating an unset or unknown value as everyone.
+func (c *configuration) fileSenders() string {
+	switch c.FileSecretSenders {
+	case sendersBots, sendersNobody:
+		return c.FileSecretSenders
+	default:
+		return sendersEveryone
+	}
+}
+
+// maxFileBytes returns the largest file one secret may carry.
+func (c *configuration) maxFileBytes() int64 {
+	if c.MaxFileSizeMB <= 0 {
+		return defaultMaxFileSizeMB * bytesPerMB
+	}
+	return int64(c.MaxFileSizeMB) * bytesPerMB
+}
+
+// maxUserBytes returns how much file data one user may hold, twice the file limit.
+func (c *configuration) maxUserBytes() int64 {
+	return 2 * c.maxFileBytes()
+}
+
+// maxStorageBytes returns the cap on file data across all users.
+func (c *configuration) maxStorageBytes() int64 {
+	if c.MaxStorageMB <= 0 {
+		return defaultMaxStorageMB * bytesPerMB
+	}
+	return int64(c.MaxStorageMB) * bytesPerMB
+}
+
+// uploadSession returns how long an unfinished upload lives.
+func (c *configuration) uploadSession() time.Duration {
+	if c.UploadSessionMinutes <= 0 {
+		return defaultUploadSessionMinutes * time.Minute
+	}
+	return time.Duration(c.UploadSessionMinutes) * time.Minute
 }
 
 // Clone shallow copies the configuration. Your implementation may require a deep copy if

@@ -28,6 +28,12 @@ type Plugin struct {
 	// pendingUpdates holds IDs of secret posts this plugin is about to update itself.
 	pendingUpdates sync.Map
 
+	// uploadLocks holds a *sync.Mutex per upload ID, serialising chunk writes, attach and sweep on this node.
+	uploadLocks sync.Map
+
+	// uploadsLock serialises the quota check and reservation when uploads start (single node only).
+	uploadsLock sync.Mutex
+
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
 

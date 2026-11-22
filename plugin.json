@@ -2,7 +2,7 @@
     "id": "com.scaleupconsulting.secrets",
     "name": "Secret Messages",
     "description": "Send one-time secrets in direct and group messages, encrypted in the browser for each recipient and burned after reading.",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "homepage_url": "",
     "support_url": "",
     "icon_path": "assets/secrets-icon.svg",
@@ -26,6 +26,48 @@
                 "type": "number",
                 "help_text": "Unread ciphertext is deleted this many minutes after sending. Default 10080 (7 days).",
                 "default": 10080
+            },
+            {
+                "key": "FileSecretSenders",
+                "display_name": "File secrets can be sent by:",
+                "type": "dropdown",
+                "help_text": "Who may attach an encrypted file to a secret. Everyone: users in the composer and bots through the API. Bots only: for example the website relay. Nobody: file secrets are off.",
+                "default": "everyone",
+                "options": [
+                    {
+                        "display_name": "Everyone",
+                        "value": "everyone"
+                    },
+                    {
+                        "display_name": "Bots only",
+                        "value": "bots"
+                    },
+                    {
+                        "display_name": "Nobody",
+                        "value": "nobody"
+                    }
+                ]
+            },
+            {
+                "key": "MaxFileSizeMB",
+                "display_name": "Maximum file size (MB):",
+                "type": "number",
+                "help_text": "Largest file one secret may carry. Each user can hold at most twice this in unread file secrets. Default 100.",
+                "default": 100
+            },
+            {
+                "key": "MaxStorageMB",
+                "display_name": "Total file storage (MB):",
+                "type": "number",
+                "help_text": "Upper bound on encrypted file data held in the plugin's key-value store across all users, including uploads in progress. Default 2048.",
+                "default": 2048
+            },
+            {
+                "key": "UploadSessionMinutes",
+                "display_name": "Upload window (minutes):",
+                "type": "number",
+                "help_text": "How long a sender has to finish uploading a file before the partial upload is deleted. Default 60.",
+                "default": 60
             }
         ]
     }
